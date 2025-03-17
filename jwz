@@ -1,0 +1,210 @@
+import pygame
+import random
+import sys
+import numpy
+from typing import Set, List, Tuple
+
+# Initialize Pygame and mixer
+pygame.init()
+pygame.mixer.init()
+
+# Constants
+GRID_SIZE = 5
+CELL_SIZE = 100
+GAP = 5
+TOTAL_CELLS = GRID_SIZE * GRID_SIZE
+NUM_TARGETS = 3
+GAME_DURATION = 60  # seconds
+
+# Calculate window size based on grid
+PADDING = 20
+STATS_HEIGHT = 60
+WINDOW_WIDTH = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * GAP + 2 * PADDING
+WINDOW_HEIGHT = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * GAP + 2 * PADDING + STATS_HEIGHT
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GRAY = (51, 51, 51)
+DARK_GRAY = (34, 34, 34)
+CYAN = (0, 255, 255)
+CYAN_DARK = (0, 183, 235)
+
+# Generate a simple "pop" sound using sine wave
+def create_pop_sound():
+    sample_rate = 44100
+    duration = 0.1  # 100ms
+    frequency = 1000  # 1kHz
+    num_samples = int(sample_rate * duration)
+
+    # Create a short sine wave that fades out
+    buf = numpy.zeros((num_samples, 2), dtype=numpy.int16)
+    t = numpy.linspace(0, duration, num_samples)
+    fade = numpy.linspace(1.0, 0.0, num_samples)  # Linear fade out
+    wave = numpy.sin(2 * numpy.pi * frequency * t) * fade * 32767
+
+    buf[:, 0] = wave  # Left channel
+    buf[:, 1] = wave  # Right channel
+
+    sound = pygame.sndarray.make_sound(buf)
+    return sound
+
+class Cell:
+    def __init__(self, x: int, y: int, index: int):
+        self.rect = pygame.Rect(x, y, CELL_SIZE, CELL_SIZE)
+        self.index = index
+        self.has_target = False
+        self.target_size = 60
+
+    def draw(self, screen: pygame.Surface):
+        # Don't draw the gray rectangle for the cell anymore
+        if self.has_target:
+            pygame.draw.circle(screen, CYAN, (self.rect.centerx, self.rect.centery), self.target_size // 2)
+
+    def is_target_hit(self, click_pos: Tuple[int, int]) -> bool:
+        if not self.has_target:
+            return False
+
+        # Calculate distance between click and target center
+        dx = click_pos[0] - self.rect.centerx
+        dy = click_pos[1] - self.rect.centery
+        distance = (dx * dx + dy * dy) ** 0.5
+
+        # Check if click is within target radius
+        return distance <= self.target_size // 2
+
+class Game:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption("Grid Target Game")
+
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.Font(None, 36)
+
+        # Create pop sound
+        self.pop_sound = create_pop_sound()
+        self.pop_sound.set_volume(0.3)  # Set to 30% volume
+
+        # Game state
+        self.score = 0
+        self.total_clicks = 0
+        self.hits = 0
+        self.time_left = GAME_DURATION
+        self.last_time = pygame.time.get_ticks()
+        self.game_active = True
+
+        # Create grid
+        self.cells: List[Cell] = []
+        self.targets: Set[int] = set()
+        self.create_grid()
+
+        # Initialize targets
+        for _ in range(NUM_TARGETS):
+            self.spawn_target()
+
+    def create_grid(self):
+        for i in range(TOTAL_CELLS):
+            row = i // GRID_SIZE
+            col = i % GRID_SIZE
+            x = PADDING + col * (CELL_SIZE + GAP)
+            y = PADDING + STATS_HEIGHT + row * (CELL_SIZE + GAP)
+            self.cells.append(Cell(x, y, i))
+
+    def spawn_target(self):
+        empty_cells = [i for i in range(TOTAL_CELLS) if i not in self.targets]
+        if empty_cells:
+            target_index = random.choice(empty_cells)
+            self.targets.add(target_index)
+            self.cells[target_index].has_target = True
+
+    def remove_target(self, index: int):
+        if index in self.targets:
+            self.targets.remove(index)
+            self.cells[index].has_target = False
+
+    def handle_click(self, pos: Tuple[int, int]):
+        if not self.game_active:
+            return
+
+        self.total_clicks += 1
+        for cell in self.cells:
+            if cell.is_target_hit(pos):
+                self.pop_sound.play()  # Play pop sound on successful hit
+                self.hits += 1
+                self.score += 1
+                self.remove_target(cell.index)
+                self.spawn_target()
+                break
+
+    def update_time(self):
+        current_time = pygame.time.get_ticks()
+        if current_time - self.last_time >= 1000:  # 1 second
+            self.time_left -= 1
+            self.last_time = current_time
+            if self.time_left <= 0:
+                self.game_active = False
+
+    def draw_stats(self):
+        # Draw stats background
+        stats_rect = pygame.Rect(0, 0, WINDOW_WIDTH, STATS_HEIGHT)
+        pygame.draw.rect(self.screen, DARK_GRAY, stats_rect)
+
+        # Draw stats text
+        accuracy = (self.hits / self.total_clicks * 100) if self.total_clicks > 0 else 0
+        stats_text = f"Score: {self.score} | Time: {self.time_left} | Accuracy: {accuracy:.1f}%"
+        text_surface = self.font.render(stats_text, True, WHITE)
+        text_rect = text_surface.get_rect(center=(WINDOW_WIDTH // 2, STATS_HEIGHT // 2))
+        self.screen.blit(text_surface, text_rect)
+
+    def draw_game_over(self):
+        # Create semi-transparent overlay
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.fill(BLACK)
+        overlay.set_alpha(128)
+        self.screen.blit(overlay, (0, 0))
+
+        # Draw game over text
+        accuracy = (self.hits / self.total_clicks * 100) if self.total_clicks > 0 else 0
+        game_over_text = self.font.render("Game Over!", True, WHITE)
+        score_text = self.font.render(f"Final Score: {self.score}", True, WHITE)
+        accuracy_text = self.font.render(f"Accuracy: {accuracy:.1f}%", True, WHITE)
+
+        text_y = WINDOW_HEIGHT // 2 - 60
+        for text in [game_over_text, score_text, accuracy_text]:
+            text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, text_y))
+            self.screen.blit(text, text_rect)
+            text_y += 40
+
+    def run(self):
+        running = True
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self.handle_click(event.pos)
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
+
+            # Update
+            if self.game_active:
+                self.update_time()
+
+            # Draw
+            self.screen.fill(DARK_GRAY)
+            for cell in self.cells:
+                cell.draw(self.screen)
+            self.draw_stats()
+
+            if not self.game_active:
+                self.draw_game_over()
+
+            pygame.display.flip()
+            self.clock.tick(60)
+
+        pygame.quit()
+        sys.exit()
+
+if __name__ == "__main__":
+    game = Game()
+    game.run()
