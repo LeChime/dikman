@@ -37,14 +37,25 @@ def create_pop_sound():
     frequency = 1000  # 1kHz
     num_samples = int(sample_rate * duration)
 
-    # Create a short sine wave that fades out
-    buf = numpy.zeros((num_samples, 2), dtype=numpy.int16)
+    # Get mixer channels
+    mixer_init = pygame.mixer.get_init()
+    if mixer_init is None:
+        raise ValueError("Mixer not initialized")
+    channels = mixer_init[2]
+
+    # Create buffer with correct number of channels
+    buf = numpy.zeros((num_samples, channels), dtype=numpy.int16)
     t = numpy.linspace(0, duration, num_samples)
     fade = numpy.linspace(1.0, 0.0, num_samples)  # Linear fade out
     wave = numpy.sin(2 * numpy.pi * frequency * t) * fade * 32767
 
-    buf[:, 0] = wave  # Left channel
-    buf[:, 1] = wave  # Right channel
+    if channels == 1:
+        buf[:, 0] = wave  # Mono: single channel
+    elif channels == 2:
+        buf[:, 0] = wave  # Left channel
+        buf[:, 1] = wave  # Right channel
+    else:
+        raise ValueError(f"Unsupported number of channels: {channels}")
 
     sound = pygame.sndarray.make_sound(buf)
     return sound
